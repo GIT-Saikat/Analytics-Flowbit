@@ -2,9 +2,18 @@
   "name": "db",
   "version": "1.0.0",
   "description": "Database package with Prisma",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
+    "build": "tsc -b && npm run copy-prisma",
+    "copy-prisma": "powershell -Command \"Copy-Item -Path 'src/generated' -Destination 'dist/' -Recurse -Force\"",
     "test": "echo \"Error: no test specified\" && exit 1",
     "db:generate": "prisma generate --schema=./prisma/schema.prisma",
     "db:push": "prisma db push --schema=./prisma/schema.prisma",
@@ -21,8 +30,8 @@
     "prisma": "^6.19.0"
   },
   "devDependencies": {
-    "tsx": "^4.7.1",
     "@types/node": "^20.11.0",
+    "tsx": "^4.7.1",
     "typescript": "^5.9.2"
   },
   "prisma": {

@@ -1,59 +1,435 @@
-import express, { Request, Response } from 'express';
+import express, { type Request, type Response } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
-import { prisma } from 'db';
+import { prisma, InvoiceStatus, Prisma } from 'db';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 
-// Load environment variables
-dotenv.config();
+const execAsync = promisify(exec);
+
+
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3005;
 
-// Middleware
+// Function to check and kill process on port (Windows-compatible)
+async function ensurePortIsFree(port: number): Promise<void> {
+  try {
+    const { stdout } = await execAsync(
+      `powershell -Command "Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique"`,
+      { windowsHide: true }
+    );
+    
+    const pid = stdout.trim();
+    if (pid && pid !== '') {
+      console.log(`Port ${port} is in use by process ${pid}. Attempting to free it...`);
+      await execAsync(`powershell -Command "Stop-Process -Id ${pid} -Force"`, { windowsHide: true });
+      console.log(`Successfully freed port ${port}`);
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  } catch (error) {
+    // Port is likely free or command failed (non-Windows), continue anyway
+    if (error instanceof Error && !error.message.includes('no matches')) {
+      console.log(`Could not check port status (this is normal on non-Windows systems)`);
+    }
+  }
+}
+
+
 app.use(cors());
 app.use(express.json());
 
-// Health check endpoint
-app.get('/health', (req: Request, res: Response) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+app.get('/stats', async (req: Request, res: Response) => {
+  try {
+    const [
+      totalInvoices,
+      totalVendors,
+      totalCustomers,
+      paidInvoices,
+      pendingInvoices,
+      overdueInvoices,
+      totalAmount,
+      paidAmount,
+      totalPayments,
+    ] = await Promise.all([
+      prisma.invoice.count(),
+      prisma.vendor.count(),
+      prisma.customer.count(),
+      prisma.invoice.count({ where: { status: 'PAID' } }),
+      prisma.invoice.count({ where: { status: 'PENDING' } }),
+      prisma.invoice.count({ where: { status: 'OVERDUE' } }),
+      prisma.invoice.aggregate({
+        _sum: { totalAmount: true },
+      }),
+      prisma.invoice.aggregate({
+        where: { status: 'PAID' },
+        _sum: { totalAmount: true },
+      }),
+      prisma.payment.count(),
+    ]);
+
+    const pendingAmount = (totalAmount._sum.totalAmount || 0) - (paidAmount._sum.totalAmount || 0);
+    
+    res.json({
+      success: true,
+      data: {
+        totalInvoices,
+        totalVendors,
+        totalCustomers,
+        paidInvoices,
+        pendingInvoices,
+        overdueInvoices,
+        totalAmount: totalAmount._sum.totalAmount || 0,
+        paidAmount: paidAmount._sum.totalAmount || 0,
+        pendingAmount,
+        totalPayments,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch statistics',
+    });
+  }
 });
 
-// ========================================
-// INVOICE ENDPOINTS
-// ========================================
-
-// Get all invoices with optional filtering
-app.get('/api/invoices', async (req: Request, res: Response) => {
+app.get('/invoice-trends', async (req: Request, res: Response) => {
   try {
-    const { status, vendorId, customerId, startDate, endDate } = req.query;
+    const invoices = await prisma.invoice.findMany({
+      select: {
+        invoiceDate: true,
+        totalAmount: true,
+        status: true,
+      },
+      orderBy: {
+        invoiceDate: 'asc',
+      },
+    });
     
-    const where: any = {};
+    const trendsByMonth: { 
+      [key: string]: { 
+        month: string;
+        count: number;
+        totalSpend: number;
+        paidSpend: number;
+        pendingSpend: number;
+      } 
+    } = {};
     
-    if (status) where.status = status;
-    if (vendorId) where.vendorId = vendorId;
-    if (customerId) where.customerId = customerId;
+    invoices.forEach((invoice) => {
+      const date = new Date(invoice.invoiceDate);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      
+      if (!trendsByMonth[monthKey]) {
+        trendsByMonth[monthKey] = { 
+          month: monthKey,
+          count: 0, 
+          totalSpend: 0, 
+          paidSpend: 0, 
+          pendingSpend: 0 
+        };
+      }
+      
+      const monthData = trendsByMonth[monthKey];
+      if (monthData) {
+        monthData.count += 1;
+        monthData.totalSpend += invoice.totalAmount;
+        
+        if (invoice.status === 'PAID') {
+          monthData.paidSpend += invoice.totalAmount;
+        } else if (invoice.status === 'PENDING' || invoice.status === 'OVERDUE' || invoice.status === 'SENT' || invoice.status === 'PARTIALLY_PAID') {
+          monthData.pendingSpend += invoice.totalAmount;
+        }
+      }
+    });
+    
+    const result = Object.values(trendsByMonth).sort((a, b) => a.month.localeCompare(b.month));
+    
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error('Error fetching invoice trends:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch invoice trends',
+    });
+  }
+});
+
+
+app.get('/vendors/top10', async (req: Request, res: Response) => {
+  try {
+    const vendors = await prisma.vendor.findMany({
+      include: {
+        invoices: {
+          select: {
+            totalAmount: true,
+            status: true,
+          },
+        },
+      },
+    });
+    
+    const vendorsWithSpend = vendors.map((vendor) => ({
+      id: vendor.id,
+      name: vendor.name,
+      email: vendor.email,
+      phone: vendor.phone,
+      totalSpend: vendor.invoices.reduce((sum, inv) => sum + inv.totalAmount, 0),
+      paidSpend: vendor.invoices
+        .filter(inv => inv.status === 'PAID')
+        .reduce((sum, inv) => sum + inv.totalAmount, 0),
+      invoiceCount: vendor.invoices.length,
+    }));
+    
+
+    vendorsWithSpend.sort((a, b) => b.totalSpend - a.totalSpend);
+    
+    res.json({
+      success: true,
+      data: vendorsWithSpend.slice(0, 10),
+    });
+  } catch (error) {
+    console.error('Error fetching top vendors:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch top vendors',
+    });
+  }
+});
+
+
+app.get('/category-spend', async (req: Request, res: Response) => {
+  try {
+    const lineItems = await prisma.lineItem.findMany({
+      select: {
+        sachkonto: true,
+        amount: true,
+        description: true,
+      },
+    });
+    
+    const categoryMap: { 
+      [key: string]: { 
+        category: string;
+        totalSpend: number;
+        itemCount: number;
+        description: string;
+      } 
+    } = {};
+    
+    lineItems.forEach((item) => {
+      const category = item.sachkonto || 'Uncategorized';
+      
+      if (!categoryMap[category]) {
+        categoryMap[category] = {
+          category,
+          totalSpend: 0,
+          itemCount: 0,
+          description: item.description,
+        };
+      }
+      
+      const categoryData = categoryMap[category];
+      if (categoryData) {
+        categoryData.totalSpend += item.amount;
+        categoryData.itemCount += 1;
+      }
+    });
+    
+    const result = Object.values(categoryMap).sort((a, b) => b.totalSpend - a.totalSpend);
+    
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error('Error fetching category spend:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch category spend',
+    });
+  }
+});
+
+app.get('/cash-outflow', async (req: Request, res: Response) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    const where: Prisma.InvoiceWhereInput = {
+      status: {
+        in: [InvoiceStatus.PENDING, InvoiceStatus.SENT, InvoiceStatus.OVERDUE, InvoiceStatus.PARTIALLY_PAID],
+      },
+    };
+    
+    
+    if (startDate || endDate) {
+      where.dueDate = {};
+      if (startDate) where.dueDate.gte = new Date(startDate as string);
+      if (endDate) where.dueDate.lte = new Date(endDate as string);
+    }
+    
+    const unpaidInvoices = await prisma.invoice.findMany({
+      where,
+      include: {
+        vendor: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        payments: {
+          select: {
+            amount: true,
+          },
+        },
+      },
+      orderBy: {
+        dueDate: 'asc',
+      },
+    });
+    
+    const outflowData = unpaidInvoices.map((invoice) => {
+      const paidAmount = invoice.payments.reduce((sum: number, payment: { amount: number }) => sum + payment.amount, 0);
+      const remainingAmount = invoice.totalAmount - paidAmount;
+      
+      return {
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        vendor: invoice.vendor.name,
+        vendorId: invoice.vendor.id,
+        dueDate: invoice.dueDate,
+        totalAmount: invoice.totalAmount,
+        paidAmount,
+        remainingAmount,
+        status: invoice.status,
+        currency: invoice.currency,
+      };
+    });
+    
+    
+    const outflowByDate: { [key: string]: number } = {};
+    outflowData.forEach((item) => {
+      if (item.dueDate) {
+        const dateKey = item.dueDate.toISOString().split('T')[0];
+        if (dateKey) {
+          outflowByDate[dateKey] = (outflowByDate[dateKey] || 0) + item.remainingAmount;
+        }
+      }
+    });
+    
+    const totalExpectedOutflow = outflowData.reduce((sum, item) => sum + item.remainingAmount, 0);
+    
+    res.json({
+      success: true,
+      data: {
+        totalExpectedOutflow,
+        invoiceCount: outflowData.length,
+        outflowByDate,
+        invoices: outflowData,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching cash outflow:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch cash outflow data',
+    });
+  }
+});
+
+app.get('/invoices', async (req: Request, res: Response) => {
+  try {
+    const { 
+      status, 
+      vendorId, 
+      customerId, 
+      startDate, 
+      endDate, 
+      search,
+      minAmount,
+      maxAmount,
+      currency,
+      page,
+      limit,
+    } = req.query;
+    
+    const where: Prisma.InvoiceWhereInput = {};
+
+    if (status && typeof status === 'string') where.status = status as InvoiceStatus;
+    
+    if (vendorId && typeof vendorId === 'string') where.vendorId = vendorId;
+    if (customerId && typeof customerId === 'string') where.customerId = customerId;
+    
     if (startDate || endDate) {
       where.invoiceDate = {};
       if (startDate) where.invoiceDate.gte = new Date(startDate as string);
       if (endDate) where.invoiceDate.lte = new Date(endDate as string);
     }
     
+    if (minAmount || maxAmount) {
+      where.totalAmount = {};
+      if (minAmount && typeof minAmount === 'string') where.totalAmount.gte = parseFloat(minAmount);
+      if (maxAmount && typeof maxAmount === 'string') where.totalAmount.lte = parseFloat(maxAmount);
+    }
+    
+    if (currency && typeof currency === 'string') where.currency = currency;
+    
+    
+    if (search && typeof search === 'string') {
+      where.OR = [
+        { invoiceNumber: { contains: search, mode: Prisma.QueryMode.insensitive } },
+        { vendor: { name: { contains: search, mode: Prisma.QueryMode.insensitive } } },
+        { customer: { name: { contains: search, mode: Prisma.QueryMode.insensitive } } },
+        { notes: { contains: search, mode: Prisma.QueryMode.insensitive } } ,
+      ];
+    }
+    
+
+    const pageNum = page ? parseInt(page as string) : 1;
+    const limitNum = limit ? parseInt(limit as string) : 50;
+    const skip = (pageNum - 1) * limitNum;
+
+    const totalCount = await prisma.invoice.count({ where });
+    
     const invoices = await prisma.invoice.findMany({
       where,
       include: {
-        vendor: true,
-        customer: true,
+        vendor: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+          },
+        },
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+          },
+        },
         lineItems: true,
         payments: true,
       },
       orderBy: {
         invoiceDate: 'desc',
       },
+      skip,
+      take: limitNum,
     });
     
     res.json({
       success: true,
       count: invoices.length,
+      totalCount,
+      page: pageNum,
+      totalPages: Math.ceil(totalCount / limitNum),
       data: invoices,
     });
   } catch (error) {
@@ -65,445 +441,111 @@ app.get('/api/invoices', async (req: Request, res: Response) => {
   }
 });
 
-// Get single invoice by ID
-app.get('/api/invoices/:id', async (req: Request, res: Response) => {
+app.post('/chat-with-data', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const { query, vannaApiKey } = req.body;
     
-    const invoice = await prisma.invoice.findUnique({
-      where: { id },
-      include: {
-        vendor: true,
-        customer: true,
-        lineItems: true,
-        payments: true,
-      },
-    });
-    
-    if (!invoice) {
-      return res.status(404).json({
+    if (!query) {
+      return res.status(400).json({
         success: false,
-        error: 'Invoice not found',
+        error: 'Query is required',
       });
     }
     
-    res.json({
-      success: true,
-      data: invoice,
+    const apiKey = vannaApiKey || process.env.VANNA_API_KEY;
+    
+    if (!apiKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Vanna API key is required. Provide it in the request body or set VANNA_API_KEY environment variable.',
+      });
+    }
+    
+    const vannaResponse = await fetch('https://api.vanna.ai/rpc', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        method: 'generate_sql',
+        params: [query],
+      }),
     });
-  } catch (error) {
-    console.error('Error fetching invoice:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch invoice',
-    });
-  }
-});
+    
+    if (!vannaResponse.ok) {
+      const errorText = await vannaResponse.text();
+      return res.status(vannaResponse.status).json({
+        success: false,
+        error: `Vanna AI API error: ${errorText}`,
+      });
+    }
+    
+    const vannaData = await vannaResponse.json() as { result?: string };
+    const generatedSQL = vannaData.result;
+    
+    if (!generatedSQL) {
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to generate SQL from query',
+      });
+    }
 
-// Get invoice statistics
-app.get('/api/invoices/stats/summary', async (req: Request, res: Response) => {
-  try {
-    const [
-      totalInvoices,
-      paidInvoices,
-      pendingInvoices,
-      overdueInvoices,
-      totalAmount,
-      paidAmount,
-    ] = await Promise.all([
-      prisma.invoice.count(),
-      prisma.invoice.count({ where: { status: 'PAID' } }),
-      prisma.invoice.count({ where: { status: 'PENDING' } }),
-      prisma.invoice.count({ where: { status: 'OVERDUE' } }),
-      prisma.invoice.aggregate({
-        _sum: { totalAmount: true },
-      }),
-      prisma.invoice.aggregate({
-        where: { status: 'PAID' },
-        _sum: { totalAmount: true },
-      }),
-    ]);
+    const sqlTrimmed = generatedSQL.trim().toLowerCase();
+    const dangerousKeywords = ['insert', 'update', 'delete', 'drop', 'create', 'alter', 'truncate', 'grant', 'revoke'];
+    
+    if (!sqlTrimmed.startsWith('select')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only SELECT queries are allowed for security reasons',
+        sql: generatedSQL,
+      });
+    }
+    
+    for (const keyword of dangerousKeywords) {
+      if (sqlTrimmed.includes(keyword)) {
+        return res.status(403).json({
+          success: false,
+          error: `Query contains forbidden keyword: ${keyword.toUpperCase()}`,
+          sql: generatedSQL,
+        });
+      }
+    }
+    
+    let data;
+    try {
+      data = await prisma.$queryRawUnsafe(generatedSQL);
+    } catch (sqlError) {
+      const errorMessage = sqlError instanceof Error ? sqlError.message : 'Unknown SQL error';
+      return res.status(500).json({
+        success: false,
+        error: 'SQL execution error',
+        sql: generatedSQL,
+        sqlError: errorMessage,
+      });
+    }
     
     res.json({
       success: true,
       data: {
-        totalInvoices,
-        paidInvoices,
-        pendingInvoices,
-        overdueInvoices,
-        totalAmount: totalAmount._sum.totalAmount || 0,
-        paidAmount: paidAmount._sum.totalAmount || 0,
-        pendingAmount: (totalAmount._sum.totalAmount || 0) - (paidAmount._sum.totalAmount || 0),
+        query,
+        sql: generatedSQL,
+        results: data,
+        rowCount: Array.isArray(data) ? data.length : 0,
       },
     });
+    
   } catch (error) {
-    console.error('Error fetching invoice stats:', error);
+    console.error('Error processing chat-with-data:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to process natural language query';
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch invoice statistics',
+      error: errorMessage,
     });
   }
 });
 
-// ========================================
-// VENDOR ENDPOINTS
-// ========================================
 
-// Get all vendors
-app.get('/api/vendors', async (req: Request, res: Response) => {
-  try {
-    const vendors = await prisma.vendor.findMany({
-      include: {
-        _count: {
-          select: { invoices: true },
-        },
-      },
-      orderBy: {
-        name: 'asc',
-      },
-    });
-    
-    res.json({
-      success: true,
-      count: vendors.length,
-      data: vendors,
-    });
-  } catch (error) {
-    console.error('Error fetching vendors:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch vendors',
-    });
-  }
-});
-
-// Get single vendor by ID with invoices
-app.get('/api/vendors/:id', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    
-    const vendor = await prisma.vendor.findUnique({
-      where: { id },
-      include: {
-        invoices: {
-          include: {
-            customer: true,
-            lineItems: true,
-            payments: true,
-          },
-        },
-      },
-    });
-    
-    if (!vendor) {
-      return res.status(404).json({
-        success: false,
-        error: 'Vendor not found',
-      });
-    }
-    
-    res.json({
-      success: true,
-      data: vendor,
-    });
-  } catch (error) {
-    console.error('Error fetching vendor:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch vendor',
-    });
-  }
-});
-
-// ========================================
-// CUSTOMER ENDPOINTS
-// ========================================
-
-// Get all customers
-app.get('/api/customers', async (req: Request, res: Response) => {
-  try {
-    const customers = await prisma.customer.findMany({
-      include: {
-        _count: {
-          select: { invoices: true },
-        },
-      },
-      orderBy: {
-        name: 'asc',
-      },
-    });
-    
-    res.json({
-      success: true,
-      count: customers.length,
-      data: customers,
-    });
-  } catch (error) {
-    console.error('Error fetching customers:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch customers',
-    });
-  }
-});
-
-// Get single customer by ID with invoices
-app.get('/api/customers/:id', async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    
-    const customer = await prisma.customer.findUnique({
-      where: { id },
-      include: {
-        invoices: {
-          include: {
-            vendor: true,
-            lineItems: true,
-            payments: true,
-          },
-        },
-      },
-    });
-    
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        error: 'Customer not found',
-      });
-    }
-    
-    res.json({
-      success: true,
-      data: customer,
-    });
-  } catch (error) {
-    console.error('Error fetching customer:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch customer',
-    });
-  }
-});
-
-// ========================================
-// PAYMENT ENDPOINTS
-// ========================================
-
-// Get all payments
-app.get('/api/payments', async (req: Request, res: Response) => {
-  try {
-    const { startDate, endDate } = req.query;
-    
-    const where: any = {};
-    
-    if (startDate || endDate) {
-      where.paymentDate = {};
-      if (startDate) where.paymentDate.gte = new Date(startDate as string);
-      if (endDate) where.paymentDate.lte = new Date(endDate as string);
-    }
-    
-    const payments = await prisma.payment.findMany({
-      where,
-      include: {
-        invoice: {
-          include: {
-            vendor: true,
-            customer: true,
-          },
-        },
-      },
-      orderBy: {
-        paymentDate: 'desc',
-      },
-    });
-    
-    res.json({
-      success: true,
-      count: payments.length,
-      data: payments,
-    });
-  } catch (error) {
-    console.error('Error fetching payments:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch payments',
-    });
-  }
-});
-
-// ========================================
-// ANALYTICS ENDPOINTS
-// ========================================
-
-// Revenue by month
-app.get('/api/analytics/revenue-by-month', async (req: Request, res: Response) => {
-  try {
-    const invoices = await prisma.invoice.findMany({
-      select: {
-        invoiceDate: true,
-        totalAmount: true,
-        status: true,
-      },
-    });
-    
-    // Group by month
-    const revenueByMonth: { [key: string]: { total: number; paid: number; pending: number } } = {};
-    
-    invoices.forEach((invoice: { invoiceDate: Date; totalAmount: number; status: string }) => {
-      const monthKey = invoice.invoiceDate.toISOString().substring(0, 7); // YYYY-MM
-      
-      if (!revenueByMonth[monthKey]) {
-        revenueByMonth[monthKey] = { total: 0, paid: 0, pending: 0 };
-      }
-      
-      const monthData = revenueByMonth[monthKey];
-      if (monthData) {
-        monthData.total += invoice.totalAmount;
-        if (invoice.status === 'PAID') {
-          monthData.paid += invoice.totalAmount;
-        } else {
-          monthData.pending += invoice.totalAmount;
-        }
-      }
-    });
-    
-    const result = Object.entries(revenueByMonth)
-      .map(([month, data]) => ({ month, ...data }))
-      .sort((a, b) => a.month.localeCompare(b.month));
-    
-    res.json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    console.error('Error fetching revenue by month:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch revenue data',
-    });
-  }
-});
-
-// Top vendors by total amount
-app.get('/api/analytics/top-vendors', async (req: Request, res: Response) => {
-  try {
-    const limit = parseInt(req.query.limit as string) || 10;
-    
-    const vendors = await prisma.vendor.findMany({
-      include: {
-        invoices: {
-          select: {
-            totalAmount: true,
-          },
-        },
-      },
-    });
-    
-    const vendorsWithTotal = vendors.map((vendor: { id: string; name: string; email: string | null; invoices: { totalAmount: number }[] }) => ({
-      id: vendor.id,
-      name: vendor.name,
-      email: vendor.email,
-      totalAmount: vendor.invoices.reduce((sum: number, inv: { totalAmount: number }) => sum + inv.totalAmount, 0),
-      invoiceCount: vendor.invoices.length,
-    }));
-    
-    vendorsWithTotal.sort((a: { totalAmount: number }, b: { totalAmount: number }) => b.totalAmount - a.totalAmount);
-    
-    res.json({
-      success: true,
-      data: vendorsWithTotal.slice(0, limit),
-    });
-  } catch (error) {
-    console.error('Error fetching top vendors:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch top vendors',
-    });
-  }
-});
-
-// Top customers by total amount
-app.get('/api/analytics/top-customers', async (req: Request, res: Response) => {
-  try {
-    const limit = parseInt(req.query.limit as string) || 10;
-    
-    const customers = await prisma.customer.findMany({
-      include: {
-        invoices: {
-          select: {
-            totalAmount: true,
-          },
-        },
-      },
-    });
-    
-    const customersWithTotal = customers.map((customer: { id: string; name: string; email: string | null; invoices: { totalAmount: number }[] }) => ({
-      id: customer.id,
-      name: customer.name,
-      email: customer.email,
-      totalAmount: customer.invoices.reduce((sum: number, inv: { totalAmount: number }) => sum + inv.totalAmount, 0),
-      invoiceCount: customer.invoices.length,
-    }));
-    
-    customersWithTotal.sort((a: { totalAmount: number }, b: { totalAmount: number }) => b.totalAmount - a.totalAmount);
-    
-    res.json({
-      success: true,
-      data: customersWithTotal.slice(0, limit),
-    });
-  } catch (error) {
-    console.error('Error fetching top customers:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch top customers',
-    });
-  }
-});
-
-// ========================================
-// VANNA AI ENDPOINT (for natural language queries)
-// ========================================
-
-// This endpoint can be used by Vanna AI to get database schema info
-app.get('/api/vanna/schema', async (req: Request, res: Response) => {
-  try {
-    res.json({
-      success: true,
-      data: {
-        tables: [
-          {
-            name: 'Vendor',
-            fields: ['id', 'name', 'email', 'phone', 'address', 'city', 'state', 'country', 'postalCode', 'taxId'],
-          },
-          {
-            name: 'Customer',
-            fields: ['id', 'name', 'email', 'phone', 'address', 'city', 'state', 'country', 'postalCode', 'taxId'],
-          },
-          {
-            name: 'Invoice',
-            fields: ['id', 'invoiceNumber', 'invoiceDate', 'dueDate', 'status', 'subtotal', 'taxAmount', 'discountAmount', 'totalAmount', 'currency', 'vendorId', 'customerId'],
-          },
-          {
-            name: 'LineItem',
-            fields: ['id', 'description', 'quantity', 'unitPrice', 'amount', 'taxRate', 'invoiceId'],
-          },
-          {
-            name: 'Payment',
-            fields: ['id', 'paymentDate', 'amount', 'paymentMethod', 'referenceNumber', 'invoiceId'],
-          },
-        ],
-      },
-    });
-  } catch (error) {
-    console.error('Error fetching schema:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch schema',
-    });
-  }
-});
-
-// 404 handler
 app.use((req: Request, res: Response) => {
   res.status(404).json({
     success: false,
@@ -511,10 +553,96 @@ app.use((req: Request, res: Response) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running on http://localhost:${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`📄 API Base URL: http://localhost:${PORT}/api`);
+
+async function startServer() {
+  await ensurePortIsFree(PORT as number);
+  
+  const server = app.listen(PORT, () => {
+    console.log(`\nServer is running on http://localhost:${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/health`);
+    console.log(`\nAvailable API Endpoints:`);
+    console.log(`   GET  /stats              - Returns totals for overview cards`);
+    console.log(`   GET  /invoice-trends     - Returns monthly invoice count and spend`);
+    console.log(`   GET  /vendors/top10      - Returns top 10 vendors by spend`);
+    console.log(`   GET  /category-spend     - Returns spend grouped by category`);
+    console.log(`   GET  /cash-outflow       - Returns expected cash outflow by date range`);
+    console.log(`   GET  /invoices           - Returns list of invoices with filters/search`);
+    console.log(`   POST /chat-with-data     - Forwards NL queries to Vanna AI and returns SQL + data`);
+  });
+
+  return server;
+}
+
+// Declare server variable at module level
+let server: ReturnType<typeof app.listen>;
+const serverPromise = startServer();
+
+// Initialize server and handle errors
+serverPromise.then((srv: ReturnType<typeof app.listen>) => {
+  server = srv;
+  
+  // Handle server errors (e.g., port already in use - should be rare now)
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`\nERROR: Port ${PORT} is already in use!`);
+      console.error(`\nTo fix this issue, you can:`);
+      console.error(`  1. Stop the process using port ${PORT}`);
+      console.error(`  2. Use a different port by setting PORT environment variable`);
+      console.error(`  3. On Windows, run: Get-Process -Id (Get-NetTCPConnection -LocalPort ${PORT}).OwningProcess | Stop-Process`);
+      console.error(`  4. Or run: npm run kill-port\n`);
+      process.exit(1);
+    } else {
+      console.error('Server error:', error);
+      process.exit(1);
+    }
+  });
+}).catch((error: Error) => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
 });
 
+// Graceful shutdown handling
+const gracefulShutdown = async (signal: string) => {
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+  
+  // Wait for server to be initialized if it's still starting
+  const srv = await serverPromise;
+  
+  // Close server to stop accepting new connections
+  srv.close(async () => {
+    console.log('HTTP server closed');
+    
+    // Close database connections
+    try {
+      await prisma.$disconnect();
+      console.log('Database connections closed');
+    } catch (error) {
+      console.error('Error closing database connections:', error);
+    }
+    
+    console.log('Graceful shutdown completed');
+    process.exit(0);
+  });
+  
+  // Force shutdown after 10 seconds if graceful shutdown fails
+  setTimeout(() => {
+    console.error('Forceful shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+// Listen for termination signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  gracefulShutdown('uncaughtException');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  gracefulShutdown('unhandledRejection');
+});

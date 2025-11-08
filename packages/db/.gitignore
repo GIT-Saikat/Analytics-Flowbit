@@ -2,4 +2,15 @@ node_modules
 # Keep environment variables out of version control
 .env
 
+# Generated Prisma client
 /src/generated/prisma
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Compiled seed files (tsx runs seed.ts directly)
+prisma/*.js
+prisma/*.d.ts
+prisma/*.map
+!prisma/migrations/**/*.js
