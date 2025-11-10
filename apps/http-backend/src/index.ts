@@ -1,6 +1,6 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -19,7 +19,7 @@ const prisma =
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = prisma;
 }
-const pendingLikeStatuses = ['PENDING', 'SENT', 'OVERDUE', 'PARTIALLY_PAID'] as Prisma.InvoiceStatus[];
+const pendingLikeStatuses: string[] = ['PENDING', 'SENT', 'OVERDUE', 'PARTIALLY_PAID'];
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -298,7 +298,7 @@ app.get('/cash-outflow', async (req: Request, res: Response) => {
   try {
     const { startDate, endDate } = req.query;
 
-    const where: Prisma.InvoiceWhereInput = {
+    const where = {
       status: {
         in: pendingLikeStatuses,
       },
@@ -395,10 +395,10 @@ app.get('/invoices', async (req: Request, res: Response) => {
       limit,
     } = req.query;
     
-    const where: Prisma.InvoiceWhereInput = {};
+    const where: { [key: string]: unknown } = {};
 
     if (status && typeof status === 'string') {
-      where.status = status as Prisma.InvoiceStatus;
+      where.status = status;
     }
     
     if (vendorId && typeof vendorId === 'string') where.vendorId = vendorId;
@@ -421,10 +421,10 @@ app.get('/invoices', async (req: Request, res: Response) => {
     
     if (search && typeof search === 'string') {
       where.OR = [
-        { invoiceNumber: { contains: search, mode: Prisma.QueryMode.insensitive } },
-        { vendor: { name: { contains: search, mode: Prisma.QueryMode.insensitive } } },
-        { customer: { name: { contains: search, mode: Prisma.QueryMode.insensitive } } },
-        { notes: { contains: search, mode: Prisma.QueryMode.insensitive } },
+        { invoiceNumber: { contains: search, mode: 'insensitive' } },
+        { vendor: { name: { contains: search, mode: 'insensitive' } } },
+        { customer: { name: { contains: search, mode: 'insensitive' } } },
+        { notes: { contains: search, mode: 'insensitive' } },
       ];
     }
     
