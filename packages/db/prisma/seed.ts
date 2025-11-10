@@ -37,16 +37,16 @@ function parseDate(dateObj: any): Date | null {
 
 function parseAddress(addressStr: string | null): { address: string; city: string; state: string; country: string; postalCode: string } {
   if (!addressStr) {
-    return { address: '', city: '', state: '', country: '', postalCode: '' };
+    return { address: "", city: "", state: "", country: "", postalCode: "" };
   }
   
   
-  const parts = addressStr.split(',').map(p => p.trim());
+  const parts = addressStr.split(",").map((p) => p.trim());
   
-  let address = '';
-  let city = '';
-  let postalCode = '';
-  let country = '';
+  let address = "";
+  let city = "";
+  let postalCode = "";
+  let country = "";
   
   if (parts.length >= 1 && parts[0]) {
     address = parts[0];
@@ -57,8 +57,8 @@ function parseAddress(addressStr: string | null): { address: string; city: strin
     const cityPart = parts[1];
     const match = cityPart.match(/^(\d+)\s+(.+)$/);
     if (match) {
-      postalCode = match[1] || '';
-      city = match[2] || '';
+      postalCode = match[1] || "";
+      city = match[2] || "";
     } else {
       city = cityPart;
     }
@@ -68,7 +68,7 @@ function parseAddress(addressStr: string | null): { address: string; city: strin
     country = parts[2];
   }
   
-  return { address, city, state: '', country, postalCode };
+  return { address, city, state: "", country, postalCode };
 }
 
 async function main() {
@@ -108,7 +108,7 @@ async function main() {
   
   for (let i = 0; i < documents.length; i++) {
     const doc = documents[i];
-    console.log(`\n📝 Processing document ${i + 1}/${documents.length} (${doc.name || doc._id})...`);
+    console.log(`\nProcessing document ${i + 1}/${documents.length} (${doc.name || doc._id})...`);
     
     try {
       

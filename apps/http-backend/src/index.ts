@@ -117,7 +117,7 @@ app.get('/invoice-trends', async (req: Request, res: Response) => {
       } 
     } = {};
     
-    invoices.forEach((invoice) => {
+    invoices.forEach((invoice:{ invoiceDate: Date; totalAmount: number; status: string }) => {
       const date = new Date(invoice.invoiceDate);
       const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
       
@@ -173,20 +173,29 @@ app.get('/vendors/top10', async (req: Request, res: Response) => {
       },
     });
     
-    const vendorsWithSpend = vendors.map((vendor) => ({
+    const vendorsWithSpend = vendors.map((vendor: (typeof vendors)[0]) => ({
       id: vendor.id,
       name: vendor.name,
       email: vendor.email,
       phone: vendor.phone,
-      totalSpend: vendor.invoices.reduce((sum, inv) => sum + inv.totalAmount, 0),
+      totalSpend: vendor.invoices.reduce(
+        (sum: number, inv: { totalAmount: number; status: string }) => sum + inv.totalAmount,
+        0
+      ),
       paidSpend: vendor.invoices
-        .filter(inv => inv.status === 'PAID')
-        .reduce((sum, inv) => sum + inv.totalAmount, 0),
+        .filter((inv: { totalAmount: number; status: string }) => inv.status === "PAID")
+        .reduce(
+          (sum: number, inv: { totalAmount: number; status: string }) => sum + inv.totalAmount,
+          0
+        ),
       invoiceCount: vendor.invoices.length,
     }));
     
 
-    vendorsWithSpend.sort((a, b) => b.totalSpend - a.totalSpend);
+    vendorsWithSpend.sort(
+      (a: (typeof vendorsWithSpend)[0], b: (typeof vendorsWithSpend)[0]) =>
+        b.totalSpend - a.totalSpend
+    );
     
     res.json({
       success: true,
@@ -221,7 +230,7 @@ app.get('/category-spend', async (req: Request, res: Response) => {
       } 
     } = {};
     
-    lineItems.forEach((item) => {
+    lineItems.forEach((item: { sachkonto: string | null; amount: number; description: string }) => {
       const category = item.sachkonto || 'Uncategorized';
       
       if (!categoryMap[category]) {
@@ -292,7 +301,7 @@ app.get('/cash-outflow', async (req: Request, res: Response) => {
       },
     });
     
-    const outflowData = unpaidInvoices.map((invoice) => {
+    const outflowData = unpaidInvoices.map((invoice: (typeof unpaidInvoices)[0]) => {
       const paidAmount = invoice.payments.reduce((sum: number, payment: { amount: number }) => sum + payment.amount, 0);
       const remainingAmount = invoice.totalAmount - paidAmount;
       
@@ -312,7 +321,7 @@ app.get('/cash-outflow', async (req: Request, res: Response) => {
     
     
     const outflowByDate: { [key: string]: number } = {};
-    outflowData.forEach((item) => {
+    outflowData.forEach((item: (typeof outflowData)[0]) => {
       if (item.dueDate) {
         const dateKey = item.dueDate.toISOString().split('T')[0];
         if (dateKey) {
@@ -321,7 +330,7 @@ app.get('/cash-outflow', async (req: Request, res: Response) => {
       }
     });
     
-    const totalExpectedOutflow = outflowData.reduce((sum, item) => sum + item.remainingAmount, 0);
+    const totalExpectedOutflow = outflowData.reduce((sum: number, item: (typeof outflowData)[0]) => sum + item.remainingAmount, 0);
     
     res.json({
       success: true,
@@ -441,67 +450,80 @@ app.get('/invoices', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/chat-with-data', async (req: Request, res: Response) => {
+app.post("/chat-with-data", async (req: Request, res: Response) => {
   try {
-    const { query, vannaApiKey } = req.body;
-    
+    const { query } = req.body;
+
     if (!query) {
       return res.status(400).json({
         success: false,
-        error: 'Query is required',
+        error: "Query is required",
       });
     }
+
+    // Use Vanna AI for SQL generation
+    const vannaServerUrl = process.env.VANNA_SERVER_URL || "http://localhost:8000";
+    let generatedSQL: string | null = null;
     
-    const apiKey = vannaApiKey || process.env.VANNA_API_KEY;
-    
-    if (!apiKey) {
-      return res.status(400).json({
-        success: false,
-        error: 'Vanna API key is required. Provide it in the request body or set VANNA_API_KEY environment variable.',
-      });
-    }
-    
-    const vannaResponse = await fetch('https://api.vanna.ai/rpc', {
-      method: 'POST',
+    try {
+      const vannaResponse = await fetch(`${vannaServerUrl}/generate-sql`, {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        method: 'generate_sql',
-        params: [query],
+          query: query,
       }),
     });
-    
+
     if (!vannaResponse.ok) {
       const errorText = await vannaResponse.text();
-      return res.status(vannaResponse.status).json({
+        return res.status(500).json({
         success: false,
-        error: `Vanna AI API error: ${errorText}`,
+          error: `Vanna AI error: ${errorText}`,
       });
     }
-    
-    const vannaData = await vannaResponse.json() as { result?: string };
-    const generatedSQL = vannaData.result;
-    
-    if (!generatedSQL) {
+
+      const vannaData = (await vannaResponse.json()) as { sql?: string; success?: boolean; error?: string };
+
+      if (!vannaData.success || !vannaData.sql) {
       return res.status(400).json({
+          success: false,
+          error: vannaData.error || "Vanna AI could not generate SQL from your question",
+        });
+      }
+      
+      generatedSQL = vannaData.sql;
+      
+    } catch (vannaError) {
+      const errorMessage = vannaError instanceof Error ? vannaError.message : "Unknown error";
+      return res.status(500).json({
         success: false,
-        error: 'Failed to generate SQL from query',
+        error: `Could not connect to Vanna AI server: ${errorMessage}. Make sure Vanna AI service is running on ${vannaServerUrl}`,
       });
     }
 
     const sqlTrimmed = generatedSQL.trim().toLowerCase();
-    const dangerousKeywords = ['insert', 'update', 'delete', 'drop', 'create', 'alter', 'truncate', 'grant', 'revoke'];
-    
-    if (!sqlTrimmed.startsWith('select')) {
+    const dangerousKeywords = [
+      "insert",
+      "update",
+      "delete",
+      "drop",
+      "create",
+      "alter",
+      "truncate",
+      "grant",
+      "revoke",
+    ];
+
+    if (!sqlTrimmed.startsWith("select")) {
       return res.status(403).json({
         success: false,
-        error: 'Only SELECT queries are allowed for security reasons',
+        error: "Only SELECT queries are allowed for security reasons",
         sql: generatedSQL,
       });
     }
-    
+
     for (const keyword of dangerousKeywords) {
       if (sqlTrimmed.includes(keyword)) {
         return res.status(403).json({
@@ -511,20 +533,20 @@ app.post('/chat-with-data', async (req: Request, res: Response) => {
         });
       }
     }
-    
+
     let data;
     try {
       data = await prisma.$queryRawUnsafe(generatedSQL);
     } catch (sqlError) {
-      const errorMessage = sqlError instanceof Error ? sqlError.message : 'Unknown SQL error';
+      const errorMessage = sqlError instanceof Error ? sqlError.message : "Unknown SQL error";
       return res.status(500).json({
         success: false,
-        error: 'SQL execution error',
+        error: "SQL execution error",
         sql: generatedSQL,
         sqlError: errorMessage,
       });
     }
-    
+
     res.json({
       success: true,
       data: {
@@ -534,10 +556,10 @@ app.post('/chat-with-data', async (req: Request, res: Response) => {
         rowCount: Array.isArray(data) ? data.length : 0,
       },
     });
-    
   } catch (error) {
-    console.error('Error processing chat-with-data:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to process natural language query';
+    console.error("Error processing chat-with-data:", error);
+    const errorMessage =
+      error instanceof Error ? error.message : "Failed to process natural language query";
     res.status(500).json({
       success: false,
       error: errorMessage,

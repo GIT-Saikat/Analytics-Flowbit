@@ -12,6 +12,11 @@ node_modules
 .env.test.local
 .env.production.local
 
+# API Keys and Config with credentials
+apps/services/vanna/config.py
+apps/services/vanna/start.ps1
+apps/services/vanna/.env
+
 # Testing
 coverage
 
@@ -36,14 +41,6 @@ yarn-error.log*
 # Misc
 .DS_Store
 *.pem
-README.md
-SCHEMA_OVERVIEW.md
-SCHEMA_VALIDATION_REPORT.md
-VALIDATION_SUMMARY.md
-WHERE_TO_PUT_JSON.md
-SETUP_GUIDE.md
-PROJECT_PLAN.md
-SEED_SCRIPT_FIXES.md
-API_ENDPOINTS.md
+
 
 *.md
