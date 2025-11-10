@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
 import { PrismaClient } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -19,7 +20,12 @@ const prisma =
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = prisma;
 }
-const pendingLikeStatuses: string[] = ['PENDING', 'SENT', 'OVERDUE', 'PARTIALLY_PAID'];
+const pendingLikeStatuses: Prisma.InvoiceStatus[] = [
+  'PENDING',
+  'SENT',
+  'OVERDUE',
+  'PARTIALLY_PAID',
+];
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -298,16 +304,19 @@ app.get('/cash-outflow', async (req: Request, res: Response) => {
   try {
     const { startDate, endDate } = req.query;
 
-    const where = {
+    const where: Prisma.InvoiceWhereInput = {
       status: {
         in: pendingLikeStatuses,
       },
     };
 
     if (startDate || endDate) {
-      where.dueDate = {};
-      if (startDate) where.dueDate.gte = new Date(startDate as string);
-      if (endDate) where.dueDate.lte = new Date(endDate as string);
+      const dueDateFilter: Prisma.DateTimeNullableFilter = {};
+      if (startDate) dueDateFilter.gte = new Date(startDate as string);
+      if (endDate) dueDateFilter.lte = new Date(endDate as string);
+      if (Object.keys(dueDateFilter).length > 0) {
+        where.dueDate = dueDateFilter;
+      }
     }
 
     const unpaidInvoices = await prisma.invoice.findMany({
@@ -395,36 +404,43 @@ app.get('/invoices', async (req: Request, res: Response) => {
       limit,
     } = req.query;
     
-    const where: { [key: string]: unknown } = {};
+    const where: Prisma.InvoiceWhereInput = {};
 
     if (status && typeof status === 'string') {
-      where.status = status;
+      where.status = status as Prisma.InvoiceStatus;
     }
     
     if (vendorId && typeof vendorId === 'string') where.vendorId = vendorId;
     if (customerId && typeof customerId === 'string') where.customerId = customerId;
     
     if (startDate || endDate) {
-      where.invoiceDate = {};
-      if (startDate) where.invoiceDate.gte = new Date(startDate as string);
-      if (endDate) where.invoiceDate.lte = new Date(endDate as string);
+      const invoiceDateFilter: Prisma.DateTimeFilter = {};
+      if (startDate) invoiceDateFilter.gte = new Date(startDate as string);
+      if (endDate) invoiceDateFilter.lte = new Date(endDate as string);
+      if (Object.keys(invoiceDateFilter).length > 0) {
+        where.invoiceDate = invoiceDateFilter;
+      }
     }
     
     if (minAmount || maxAmount) {
-      where.totalAmount = {};
-      if (minAmount && typeof minAmount === 'string') where.totalAmount.gte = parseFloat(minAmount);
-      if (maxAmount && typeof maxAmount === 'string') where.totalAmount.lte = parseFloat(maxAmount);
+      const amountFilter: Prisma.FloatFilter = {};
+      if (minAmount && typeof minAmount === 'string') amountFilter.gte = parseFloat(minAmount);
+      if (maxAmount && typeof maxAmount === 'string') amountFilter.lte = parseFloat(maxAmount);
+      if (Object.keys(amountFilter).length > 0) {
+        where.totalAmount = amountFilter;
+      }
     }
     
     if (currency && typeof currency === 'string') where.currency = currency;
     
     
     if (search && typeof search === 'string') {
+      const mode = 'insensitive' as Prisma.QueryMode;
       where.OR = [
-        { invoiceNumber: { contains: search, mode: 'insensitive' } },
-        { vendor: { name: { contains: search, mode: 'insensitive' } } },
-        { customer: { name: { contains: search, mode: 'insensitive' } } },
-        { notes: { contains: search, mode: 'insensitive' } },
+        { invoiceNumber: { contains: search, mode } },
+        { vendor: { name: { contains: search, mode } } },
+        { customer: { name: { contains: search, mode } } },
+        { notes: { contains: search, mode } },
       ];
     }
     
