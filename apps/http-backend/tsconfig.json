@@ -12,9 +12,6 @@
     "baseUrl": ".",
     "types": ["node"],
     "lib": ["esnext"],
-    "paths": {
-      "db": ["../../packages/db/src/index.ts"]
-    },
 
     // Other Outputs
     "sourceMap": true,

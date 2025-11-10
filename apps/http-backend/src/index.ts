@@ -1,6 +1,24 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
-import { prisma, InvoiceStatus, Prisma } from 'db';
+import { PrismaClient } from '@prisma/client';
+import type { Invoice, Prisma } from '@prisma/client';
+
+const globalForPrisma = globalThis as typeof globalThis & {
+  prisma?: PrismaClient;
+};
+
+const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+  });
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForPrisma.prisma = prisma;
+}
+
+type InvoiceStatus = Invoice['status'];
+const pendingLikeStatuses: InvoiceStatus[] = ['PENDING', 'SENT', 'OVERDUE', 'PARTIALLY_PAID'];
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -282,20 +300,19 @@ app.get('/category-spend', async (req: Request, res: Response) => {
 app.get('/cash-outflow', async (req: Request, res: Response) => {
   try {
     const { startDate, endDate } = req.query;
-    
-    const where: Prisma.InvoiceWhereInput = {
+
+    const where: Prisma.InvoiceFindManyArgs['where'] = {
       status: {
-        in: [InvoiceStatus.PENDING, InvoiceStatus.SENT, InvoiceStatus.OVERDUE, InvoiceStatus.PARTIALLY_PAID],
+        in: pendingLikeStatuses,
       },
     };
-    
-    
+
     if (startDate || endDate) {
       where.dueDate = {};
       if (startDate) where.dueDate.gte = new Date(startDate as string);
       if (endDate) where.dueDate.lte = new Date(endDate as string);
     }
-    
+
     const unpaidInvoices = await prisma.invoice.findMany({
       where,
       include: {
@@ -381,9 +398,11 @@ app.get('/invoices', async (req: Request, res: Response) => {
       limit,
     } = req.query;
     
-    const where: Prisma.InvoiceWhereInput = {};
+    const where: Prisma.InvoiceFindManyArgs['where'] = {};
 
-    if (status && typeof status === 'string') where.status = status as InvoiceStatus;
+    if (status && typeof status === 'string') {
+      where.status = status as InvoiceStatus;
+    }
     
     if (vendorId && typeof vendorId === 'string') where.vendorId = vendorId;
     if (customerId && typeof customerId === 'string') where.customerId = customerId;
@@ -405,10 +424,10 @@ app.get('/invoices', async (req: Request, res: Response) => {
     
     if (search && typeof search === 'string') {
       where.OR = [
-        { invoiceNumber: { contains: search, mode: Prisma.QueryMode.insensitive } },
-        { vendor: { name: { contains: search, mode: Prisma.QueryMode.insensitive } } },
-        { customer: { name: { contains: search, mode: Prisma.QueryMode.insensitive } } },
-        { notes: { contains: search, mode: Prisma.QueryMode.insensitive } } ,
+        { invoiceNumber: { contains: search, mode: 'insensitive' } },
+        { vendor: { name: { contains: search, mode: 'insensitive' } } },
+        { customer: { name: { contains: search, mode: 'insensitive' } } },
+        { notes: { contains: search, mode: 'insensitive' } },
       ];
     }
     
