@@ -37,6 +37,6 @@
     "moduleDetection": "force",
     "skipLibCheck": true,
   },
-  "include": ["src/**/*"],
+  "files": ["src/index.ts"],
   "exclude": ["node_modules", "dist", "api"]
 }
