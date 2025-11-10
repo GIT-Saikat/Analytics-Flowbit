@@ -1,4 +1,4 @@
-import { PrismaClient } from "./generated/prisma/index.js";
+import { PrismaClient } from "@prisma/client";
 
 // Export configured Prisma client with proper logging
 export const prisma = new PrismaClient({
@@ -6,4 +6,4 @@ export const prisma = new PrismaClient({
 });
 
 // Re-export all Prisma types
-export * from "./generated/prisma/index.js";
+export * from "@prisma/client";
