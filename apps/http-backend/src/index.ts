@@ -6,10 +6,9 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-
-
 const app = express();
 const PORT = process.env.PORT || 3005;
+const isServerless = Boolean(process.env.VERCEL);
 
 // Function to check and kill process on port (Windows-compatible)
 async function ensurePortIsFree(port: number): Promise<void> {
@@ -18,14 +17,14 @@ async function ensurePortIsFree(port: number): Promise<void> {
       `powershell -Command "Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique"`,
       { windowsHide: true }
     );
-    
+
     const pid = stdout.trim();
     if (pid && pid !== '') {
       console.log(`Port ${port} is in use by process ${pid}. Attempting to free it...`);
       await execAsync(`powershell -Command "Stop-Process -Id ${pid} -Force"`, { windowsHide: true });
       console.log(`Successfully freed port ${port}`);
-      
-      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   } catch (error) {
     // Port is likely free or command failed (non-Windows), continue anyway
@@ -35,8 +34,24 @@ async function ensurePortIsFree(port: number): Promise<void> {
   }
 }
 
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0);
 
-app.use(cors());
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error('Origin not allowed by CORS'));
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 app.get('/stats', async (req: Request, res: Response) => {
@@ -574,11 +589,9 @@ app.use((req: Request, res: Response) => {
     error: 'Endpoint not found',
   });
 });
-
-
 async function startServer() {
   await ensurePortIsFree(PORT as number);
-  
+
   const server = app.listen(PORT, () => {
     console.log(`\nServer is running on http://localhost:${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/health`);
@@ -595,76 +608,70 @@ async function startServer() {
   return server;
 }
 
-// Declare server variable at module level
-let server: ReturnType<typeof app.listen>;
-const serverPromise = startServer();
+if (!isServerless) {
+  let server: ReturnType<typeof app.listen>;
+  const serverPromise = startServer();
 
-// Initialize server and handle errors
-serverPromise.then((srv: ReturnType<typeof app.listen>) => {
-  server = srv;
-  
-  // Handle server errors (e.g., port already in use - should be rare now)
-  server.on('error', (error: NodeJS.ErrnoException) => {
-    if (error.code === 'EADDRINUSE') {
-      console.error(`\nERROR: Port ${PORT} is already in use!`);
-      console.error(`\nTo fix this issue, you can:`);
-      console.error(`  1. Stop the process using port ${PORT}`);
-      console.error(`  2. Use a different port by setting PORT environment variable`);
-      console.error(`  3. On Windows, run: Get-Process -Id (Get-NetTCPConnection -LocalPort ${PORT}).OwningProcess | Stop-Process`);
-      console.error(`  4. Or run: npm run kill-port\n`);
+  serverPromise
+    .then((srv: ReturnType<typeof app.listen>) => {
+      server = srv;
+
+      // Handle server errors (e.g., port already in use - should be rare now)
+      server.on('error', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'EADDRINUSE') {
+          console.error(`\nERROR: Port ${PORT} is already in use!`);
+          console.error(`\nTo fix this issue, you can:`);
+          console.error(`  1. Stop the process using port ${PORT}`);
+          console.error(`  2. Use a different port by setting PORT environment variable`);
+          console.error(`  3. On Windows, run: Get-Process -Id (Get-NetTCPConnection -LocalPort ${PORT}).OwningProcess | Stop-Process`);
+          console.error(`  4. Or run: npm run kill-port\n`);
+          process.exit(1);
+        } else {
+          console.error('Server error:', error);
+          process.exit(1);
+        }
+      });
+    })
+    .catch((error: Error) => {
+      console.error('Failed to start server:', error);
       process.exit(1);
-    } else {
-      console.error('Server error:', error);
+    });
+
+  const gracefulShutdown = async (signal: string) => {
+    console.log(`\n${signal} received. Starting graceful shutdown...`);
+
+    const srv = await serverPromise;
+
+    srv.close(async () => {
+      console.log('HTTP server closed');
+
+      try {
+        await prisma.$disconnect();
+        console.log('Database connections closed');
+      } catch (error) {
+        console.error('Error closing database connections:', error);
+      }
+
+      console.log('Graceful shutdown completed');
+      process.exit(0);
+    });
+
+    setTimeout(() => {
+      console.error('Forceful shutdown after timeout');
       process.exit(1);
-    }
+    }, 10000);
+  };
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    void gracefulShutdown('uncaughtException');
   });
-}).catch((error: Error) => {
-  console.error('Failed to start server:', error);
-  process.exit(1);
-});
-
-// Graceful shutdown handling
-const gracefulShutdown = async (signal: string) => {
-  console.log(`\n${signal} received. Starting graceful shutdown...`);
-  
-  // Wait for server to be initialized if it's still starting
-  const srv = await serverPromise;
-  
-  // Close server to stop accepting new connections
-  srv.close(async () => {
-    console.log('HTTP server closed');
-    
-    // Close database connections
-    try {
-      await prisma.$disconnect();
-      console.log('Database connections closed');
-    } catch (error) {
-      console.error('Error closing database connections:', error);
-    }
-    
-    console.log('Graceful shutdown completed');
-    process.exit(0);
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    void gracefulShutdown('unhandledRejection');
   });
-  
-  // Force shutdown after 10 seconds if graceful shutdown fails
-  setTimeout(() => {
-    console.error('Forceful shutdown after timeout');
-    process.exit(1);
-  }, 10000);
-};
+}
 
-// Listen for termination signals
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  gracefulShutdown('uncaughtException');
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  gracefulShutdown('unhandledRejection');
-});
+export default app;
