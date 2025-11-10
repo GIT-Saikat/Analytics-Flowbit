@@ -1,0 +1,11 @@
+{
+    "name": "vanna-service",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Groq-powered SQL generator service",
+    "scripts": {
+      "start": "python groq_server.py",
+      "dev": "python groq_server.py"
+    }
+  }
+  

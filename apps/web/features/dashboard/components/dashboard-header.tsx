@@ -13,8 +13,7 @@ type DashboardHeaderProps = {
 };
 
 export function DashboardHeader({ title = "Dashboard" }: DashboardHeaderProps) {
-  const fallbackInitials =
-    currentUser.initials ?? currentUser.name.slice(0, 2).toUpperCase();
+  const fallbackInitials = currentUser.initials ?? currentUser.name.slice(0, 2).toUpperCase();
 
   return (
     <header className="flex h-[64px] w-full items-center border border-black bg-card shadow-[0_6px_12px_rgba(0,0,0,0.12)] box-border">
@@ -29,16 +28,11 @@ export function DashboardHeader({ title = "Dashboard" }: DashboardHeaderProps) {
         </div>
         <div className="flex items-center gap-3">
           <Avatar>
-            <AvatarImage
-              src={avatarImg.src}
-              alt={currentUser.name}
-            />
+            <AvatarImage src={avatarImg.src} alt={currentUser.name} />
             <AvatarFallback>{fallbackInitials}</AvatarFallback>
           </Avatar>
           <div className="flex flex-col leading-none">
-            <p className="text-base font-semibold text-foreground">
-              {currentUser.name}
-            </p>
+            <p className="text-base font-semibold text-foreground">{currentUser.name}</p>
             <p className="text-sm text-muted-foreground">{currentUser.role}</p>
           </div>
           <Button
@@ -54,5 +48,3 @@ export function DashboardHeader({ title = "Dashboard" }: DashboardHeaderProps) {
     </header>
   );
 }
-
-

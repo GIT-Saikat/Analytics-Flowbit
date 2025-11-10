@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
 
 const spendTrend = [
@@ -59,22 +53,15 @@ export function DashboardEmptyState() {
                   <CardTitle className="text-2xl font-semibold tracking-tight text-slate-900">
                     {card.amount}
                   </CardTitle>
-                  <p className="text-xs font-medium text-emerald-500">
-                    {card.change}
-                  </p>
+                  <p className="text-xs font-medium text-emerald-500">{card.change}</p>
                 </div>
-                <span className="pt-px text-[11px] font-medium text-muted-foreground">
-                  (YTD)
-                </span>
+                <span className="pt-px text-[11px] font-medium text-muted-foreground">(YTD)</span>
               </div>
             </CardHeader>
             <CardContent className="px-4 pb-4 pt-2">
               <div className="h-[44px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={spendTrend}
-                    margin={{ top: 4, right: 4, left: 4, bottom: 0 }}
-                  >
+                  <LineChart data={spendTrend} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
                     <Line
                       type="monotone"
                       dataKey="value"

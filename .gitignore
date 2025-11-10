@@ -16,6 +16,10 @@ node_modules
 apps/services/vanna/config.py
 apps/services/vanna/start.ps1
 apps/services/vanna/.env
+apps/services/vanna/__pycache__/
+__pycache__/
+.venv/
+apps/services/vanna/.venv/
 
 # Testing
 coverage

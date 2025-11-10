@@ -84,12 +84,13 @@ export default function ChatPage() {
     }
   };
 
-  const renderResults = (results: Record<string, unknown>[]) => {
+  const renderResults = (results?: Record<string, unknown>[]) => {
     if (!results || results.length === 0) {
       return <div className="text-sm text-gray-500">No results found</div>;
     }
 
-    const keys = Object.keys(results[0]);
+    const firstRow = results[0];
+    const keys = Object.keys(firstRow ?? {});
 
     return (
       <div className="overflow-x-auto rounded-lg border">

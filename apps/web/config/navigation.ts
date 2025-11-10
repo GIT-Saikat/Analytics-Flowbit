@@ -2,6 +2,7 @@ import {
   FileText,
   Layers3,
   LayoutDashboard,
+  MessageSquare,
   Receipt,
   Settings,
   Users,
@@ -14,6 +15,11 @@ export const generalNavigation: NavigationItem[] = [
     label: "Dashboard",
     icon: LayoutDashboard,
     href: "/",
+  },
+  {
+    label: "Chat with Data",
+    icon: MessageSquare,
+    href: "/chat",
   },
   {
     label: "Invoice",
@@ -41,4 +47,3 @@ export const generalNavigation: NavigationItem[] = [
     href: "/settings",
   },
 ];
-
