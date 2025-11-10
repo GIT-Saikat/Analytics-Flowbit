@@ -5,7 +5,18 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": [".next/**", "!.next/cache/**"]
+      "outputs": [".next/**", "!.next/cache/**"],
+      "env": [
+        "DATABASE_URL",
+        "VANNA_SERVER_URL",
+        "CORS_ALLOWED_ORIGINS",
+        "GROQ_API_KEY",
+        "VANNA_API_KEY",
+        "VANNA_MODEL",
+        "GROQ_MODEL",
+        "GROQ_TEMPERATURE",
+        "GROQ_MAX_TOKENS"
+      ]
     },
     "lint": {
       "dependsOn": ["^lint"]
