@@ -1,0 +1,156 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Vendor {
+  id                  String    @id @default(uuid())
+  name                String
+  partyNumber         String?
+  email               String?
+  phone               String?
+  address             String?
+  city                String?
+  state               String?
+  country             String?
+  postalCode          String?
+  taxId               String?   @unique
+  bankAccountNumber   String?
+  bic                 String?
+  accountName         String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  invoices            Invoice[]
+
+  @@index([name])
+  @@index([email])
+  @@index([taxId])
+}
+
+model Customer {
+  id          String    @id @default(uuid())
+  name        String
+  email       String?
+  phone       String?
+  address     String?
+  city        String?
+  state       String?
+  country     String?
+  postalCode  String?
+  taxId       String?   @unique
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  invoices    Invoice[]
+
+  @@index([name])
+  @@index([email])
+  @@index([taxId])
+}
+
+model Invoice {
+  id                  String        @id @default(uuid())
+  invoiceNumber       String        @unique
+  invoiceDate         DateTime
+  deliveryDate        DateTime?
+  dueDate             DateTime?
+  status              InvoiceStatus @default(PENDING)
+  subtotal            Float
+  taxAmount           Float         @default(0)
+  discountAmount      Float         @default(0)
+  totalAmount         Float
+  currency            String        @default("EUR")
+  currencySymbol      String?
+  documentType        String?
+  notes               String?
+  paymentTerms        String?
+  netDays             Int?
+  discountPercentage  Float?
+  discountDays        Int?
+  discountDueDate     DateTime?
+  discountedTotal     Float?
+
+  vendorId            String
+  vendor              Vendor        @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  customerId          String
+  customer            Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  lineItems           LineItem[]
+  payments            Payment[]
+
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([invoiceNumber])
+  @@index([vendorId])
+  @@index([customerId])
+  @@index([invoiceDate])
+  @@index([status])
+  @@index([dueDate])
+}
+
+model LineItem {
+  id              String   @id @default(uuid())
+  srNo            Int?
+  description     String
+  quantity        Float
+  unitPrice       Float
+  amount          Float
+  taxRate         Float    @default(0)
+  sachkonto       String?
+  buSchluessel    String?
+
+  invoiceId       String
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([invoiceId])
+}
+
+model Payment {
+  id              String        @id @default(uuid())
+  paymentDate     DateTime
+  amount          Float
+  paymentMethod   PaymentMethod @default(BANK_TRANSFER)
+  referenceNumber String?
+  notes           String?
+
+  invoiceId       String
+  invoice         Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([invoiceId])
+  @@index([paymentDate])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  SENT
+  PAID
+  PARTIALLY_PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CREDIT_CARD
+  DEBIT_CARD
+  BANK_TRANSFER
+  CHECK
+  PAYPAL
+  OTHER
+}
+
