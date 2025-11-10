@@ -1,6 +1,10 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
 import { PrismaClient, Prisma } from '@prisma/client';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 const globalForPrisma = globalThis as typeof globalThis & {
   prisma?: PrismaClient;
@@ -15,17 +19,7 @@ const prisma =
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = prisma;
 }
-
-const pendingLikeStatuses: Prisma.InvoiceStatus[] = [
-  Prisma.InvoiceStatus.PENDING,
-  Prisma.InvoiceStatus.SENT,
-  Prisma.InvoiceStatus.OVERDUE,
-  Prisma.InvoiceStatus.PARTIALLY_PAID,
-];
-import { exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
+const pendingLikeStatuses = ['PENDING', 'SENT', 'OVERDUE', 'PARTIALLY_PAID'] as Prisma.InvoiceStatus[];
 
 const app = express();
 const PORT = process.env.PORT || 3005;
