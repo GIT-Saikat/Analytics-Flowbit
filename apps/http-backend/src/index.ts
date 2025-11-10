@@ -1,7 +1,6 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
-import { PrismaClient } from '@prisma/client';
-import type { Invoice, Prisma } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 
 const globalForPrisma = globalThis as typeof globalThis & {
   prisma?: PrismaClient;
@@ -17,8 +16,12 @@ if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = prisma;
 }
 
-type InvoiceStatus = Invoice['status'];
-const pendingLikeStatuses: InvoiceStatus[] = ['PENDING', 'SENT', 'OVERDUE', 'PARTIALLY_PAID'];
+const pendingLikeStatuses: Prisma.InvoiceStatus[] = [
+  Prisma.InvoiceStatus.PENDING,
+  Prisma.InvoiceStatus.SENT,
+  Prisma.InvoiceStatus.OVERDUE,
+  Prisma.InvoiceStatus.PARTIALLY_PAID,
+];
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -301,7 +304,7 @@ app.get('/cash-outflow', async (req: Request, res: Response) => {
   try {
     const { startDate, endDate } = req.query;
 
-    const where: Prisma.InvoiceFindManyArgs['where'] = {
+    const where: Prisma.InvoiceWhereInput = {
       status: {
         in: pendingLikeStatuses,
       },
@@ -398,10 +401,10 @@ app.get('/invoices', async (req: Request, res: Response) => {
       limit,
     } = req.query;
     
-    const where: Prisma.InvoiceFindManyArgs['where'] = {};
+    const where: Prisma.InvoiceWhereInput = {};
 
     if (status && typeof status === 'string') {
-      where.status = status as InvoiceStatus;
+      where.status = status as Prisma.InvoiceStatus;
     }
     
     if (vendorId && typeof vendorId === 'string') where.vendorId = vendorId;
@@ -424,10 +427,10 @@ app.get('/invoices', async (req: Request, res: Response) => {
     
     if (search && typeof search === 'string') {
       where.OR = [
-        { invoiceNumber: { contains: search, mode: 'insensitive' } },
-        { vendor: { name: { contains: search, mode: 'insensitive' } } },
-        { customer: { name: { contains: search, mode: 'insensitive' } } },
-        { notes: { contains: search, mode: 'insensitive' } },
+        { invoiceNumber: { contains: search, mode: Prisma.QueryMode.insensitive } },
+        { vendor: { name: { contains: search, mode: Prisma.QueryMode.insensitive } } },
+        { customer: { name: { contains: search, mode: Prisma.QueryMode.insensitive } } },
+        { notes: { contains: search, mode: Prisma.QueryMode.insensitive } },
       ];
     }
     
