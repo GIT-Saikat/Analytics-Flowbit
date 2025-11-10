@@ -9,8 +9,12 @@
     // See also https://aka.ms/tsconfig/module
     "module": "nodenext",
     "target": "esnext",
+    "baseUrl": ".",
     "types": ["node"],
     "lib": ["esnext"],
+    "paths": {
+      "db": ["../../packages/db/src/index.ts"]
+    },
 
     // Other Outputs
     "sourceMap": true,
